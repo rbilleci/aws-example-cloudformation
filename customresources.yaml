@@ -1,0 +1,135 @@
+
+  # ----------------- AMI Info Function -------------------------------------
+  SGAMILambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeImages
+                Resource: "*"
+
+  SGAMIFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.7
+      FunctionName: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sgami
+      Timeout: 30
+      Role: !GetAtt SGAMILambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import operator
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          def lambda_handler(event, context):
+            print(event)
+            if event['RequestType'] == 'Delete':
+              response = {'Status': 'SUCCESS', 'PhysicalResourceId': context.log_stream_name, 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId']}
+              print(response)
+              print(urlopen(Request(event['ResponseURL'], urlencode(response).encode())).read().decode())
+              return
+            data = boto3.client('ec2').describe_images( Filters = [{'Name': 'name', 'Values': ['aws-storage-gateway*'] }])
+            latest_image = None
+            latest_date = None
+            for image in data['Images']:
+              if latest_date is None or latest_date < image['CreationDate']:
+                latest_date = image['CreationDate']
+                latest_image = image['ImageId']
+            response = {'Status': 'SUCCESS', 'PhysicalResourceId': context.log_stream_name, 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId'], 'Data': {'ImageId': latest_image}}
+            print(response)
+            print(urlopen(Request(event['ResponseURL'], urlencode(response).encode())).read().decode())
+            return
+
+  SGAMI:
+    DependsOn: SGAMIFunction
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sgami
+
+  # ----------------- AD forwarder function -------------------
+  SGADLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ds:CreateConditionalForwarder
+                Resource: "*"
+
+  SGADForwarderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.7
+      FunctionName: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:adforwarder
+      Timeout: 30
+      Role: !GetAtt SGADLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          def lambda_handler(event, context):
+            print(event)
+            if event['RequestType'] == 'Delete':
+              response = {'Status': 'SUCCESS', 'PhysicalResourceId': context.log_stream_name, 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId']}
+              print(response)
+              print(urlopen(Request(event['ResponseURL'], urlencode(response).encode())).read().decode())
+              return
+            client = boto3.client('ds')
+            client.create_conditional_forwarder(DirectoryId=event['ResourceProperties']['DirectoryId'], RemoteDomainName='ec2.internal', DnsIpAddrs=['10.1.0.2'])
+            client.create_conditional_forwarder(DirectoryId=event['ResourceProperties']['DirectoryId'], RemoteDomainName='amazonaws.com', DnsIpAddrs=['10.1.0.2'])
+            response = { 'Status': 'SUCCESS', 'PhysicalResourceId': context.log_stream_name, 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId']}
+            print(response)
+            print(urlopen(Request(event['ResponseURL'], urlencode(response).encode())).read().decode())
+            return
+
+  SGADForwarder:
+    DependsOn: SGADForwarderFunction
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:adforwarder
+      DirectoryId: !Ref SGActiveDirectory
