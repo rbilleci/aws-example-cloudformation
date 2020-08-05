@@ -4,7 +4,7 @@
 
 #### Get the AMI
 
-Get the image id of the latest storage gateway image from the marketplace. Rune the following command, making sure to enter 
+Get the image id of the latest AWS Storgage Gateway image from the marketplace. Run the following command, making sure to enter 
 the region you intend to deploy to.
 
 <code>
@@ -13,7 +13,7 @@ aws ec2 describe-images --region us-east-1 --owners amazon --filters 'Name=name,
 
 #### Launch the CFN Template
 
-First, make sure you have a keypair for the region, you will need to enter it into the cfn template.
+First, make sure you have a keypair for the region, you will need to enter it into the cfn template parameters.
 
 From the AWS Management Console run the cfn.yaml template, making sure to update the AMI id's and other parameters. 
 
@@ -21,8 +21,8 @@ Get a coffee. It will take up to 30 minutes to create the template.
 
 This sets up two VPCs:
 
-- VPC A: Fleet of Squid proxy servers that connect to the VPC endpoints for the AWS Storage Gateway service and S3
-- VPC B: Emulated on-premise environment, using VPC Peering to connect to the proxy servers in VPC A
+- VPC A: An AutoScaling Group of Squid proxies behind a Network Load Balancer. The Squid proxiesconnect to the VPC endpoints for the AWS Storage Gateway service and S3
+- VPC B: Emulated on-premise environment, using VPC Peering to connect to the proxy servers in VPC A. This is where the AWS Storage Gateway is deployed to, as well as a Windows client to test/demo SMB access.
 
 #### Setup the AD Domain to forward DNS requests to the VPC
 
@@ -48,15 +48,15 @@ aws ds create-conditional-forwarder --region us-east-1 --directory-id d-996726d0
 
 In the AWS Management Console:
 
-1. Get the public IP address of your AWS Storage Gateway instance
-2. Get the endpoint address of the VPC Endpoint for the AWS Storage Gateway service
+1. Get the endpoint address of the VPC Endpoint for the AWS Storage Gateway service.
+2. Get the public IP address of your AWS Storage Gateway instance
 3. From the AWS Management Console, go the AWS Storage Gateway user interface
 4. Create a new AWS Storage Gateway
     - Select "File Gateway"
     - For the host platform select "Amazon EC2"
     - For the endpoint type, select "VPC"
-    - Provide the VPC endpoint address of the AWS Storage Gateway service
-    - Provide the public IP address of the AWS Storage Gateway
+    - Provide the VPC endpoint address of the AWS Storage Gateway service (from step 1)
+    - Provide the public IP address of the AWS Storage Gateway (from step 2)
     - Click "Connect to Gateway"
     - You can now provide a gateway name
     - Click "Activate Gateway"
@@ -67,10 +67,12 @@ In the AWS Management Console:
 
 1. In the AWS Management Console: Get the DNS IP addresses of the Active Directory cluster (IPs, not dns name)
 2. In the AWS Management Console: Get the endpoint address of your private NLB (dns name, not IP)
-3. From the terminal: Login to the Storage Gateway. You can get the connection details from the EC2 user interface
+3. From the terminal: Login to the Storage Gateway. 
+    - You can get the SSH connection details from the EC2 user interface
+    - Make sure to login as "admin" (not "ec2-user" or "root")
     - Configure the Storage Gateway to use the DNS addresses taken from step 1.
-    - Configure the Storage Gateway to use the Proxy Server. Use the address of the NLB taken from step 2. Make certain to use port 3128, the standard squid port
-4. When prompted, make sure to restart the networking and router. Then you have to wait a few minutes
+    - Configure the Storage Gateway to use the Squid Proxies on port **3128**. Use the endpoint address of the NLB taken from step 2. Make certain to use port 3128, the standard squid port
+4. When prompted, restart the networking and router. Then you have to wait a few minutes
 5. Use the Storage Gateway tool to test the network configuration and make sure all the tests pass
 
 #### Join the AWS Storage Gateway to the AD Domain
@@ -104,3 +106,4 @@ In the AWS Management Console:
 A windows client was created with the cloudformation template. You can connect to it and test out the share, using the "aws.com/admin" user
 
 e.g. net use E: \\10.1.2.14\file-share /U:aws.com\admin
+
