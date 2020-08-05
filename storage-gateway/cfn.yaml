@@ -1,0 +1,510 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+
+Parameters:
+
+  ADDomain:
+    Type: String
+    Default: 'aws.com'
+    Description: Active Directory Domain Name
+
+  ADPassword:
+    Type: String
+    Default: '!SGExample1234!'
+    NoEcho: true
+    Description: Active Directory Admin Password
+
+  ADShortName:
+    Type: String
+    Default: AWS
+    Description: Active Directory Short Name (NetBios Name)
+
+  EC2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: aws
+    Description: Key Pair
+
+  ProxyAMI:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs'
+
+  ProxyInstanceType:
+    Type: String
+    Default: m5n.large
+    Description: Instance Type for the Squid Proxy
+
+  SGAMI:
+    Type: String
+    Default: ami-08dcf54ec97e3cbc8
+    Description: Region Specific AMI of the Storage Gateway
+
+  SGInstanceType:
+    Type: String
+    Default: r5n.large
+    Description: Instance Type for the Storage Gateway
+
+
+  WindowsClientAMI:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base'
+
+  WindowsClientInstanceType:
+    Type: String
+    Default: t3.large
+    Description: Instance Type for the Storage Gateway
+
+Resources:
+
+
+  # ----------------- Storage Gateway Bucket ----------------
+  StorageGatewayBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ----------------- Peering Connection ----------------
+  PeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref SGVPC
+      PeerVpcId: !Ref ProxyVPC
+
+  SGPeeringRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: !GetAtt ProxyVPC.CidrBlock
+      RouteTableId: !Ref SGRouteTable
+      VpcPeeringConnectionId: !Ref PeeringConnection
+
+  ProxyPeeringRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: !GetAtt SGVPC.CidrBlock
+      RouteTableId: !Ref ProxyRouteTable
+      VpcPeeringConnectionId: !Ref PeeringConnection
+
+  # ----------------- Proxy -----------------
+  ProxyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: proxy-vpc
+
+  ProxyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: proxy-ig
+
+  ProxyInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref ProxyInternetGateway
+      VpcId: !Ref ProxyVPC
+
+  ProxyRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProxyVPC
+      Tags:
+        - Key: Name
+          Value: proxy-route-table
+
+  ProxyPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: ProxyInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref ProxyRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ProxyInternetGateway
+
+  ProxySubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProxyVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: proxy-subnet-1
+
+  ProxySubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProxyVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: proxy-subnet-2
+
+  ProxySubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ProxySubnet1
+      RouteTableId: !Ref ProxyRouteTable
+
+  ProxySubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ProxySubnet2
+      RouteTableId: !Ref ProxyRouteTable
+
+  ProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Squid Proxy
+      VpcId: !Ref ProxyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3128
+          ToPort: 3128
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: proxy-sg
+
+  ProxyVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Squid Proxy
+      VpcId: !Ref ProxyVPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: proxy-sg-vpce
+
+  ProxyS3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      #PolicyDocument: '{
+      #   "Version":"2012-10-17",
+      #   "Statement":[{
+      #     "Effect":"Allow",
+      #     "Principal": "*",
+      #     "Action":["s3:GetObject"],
+      #     "Resource":["arn:aws:s3:::examplebucket/*"]
+      #   }]
+      #}'
+      RouteTableIds:
+        - !Ref ProxyRouteTable
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref ProxyVPC
+      VpcEndpointType: Gateway
+
+  ProxySGVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: false
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.storagegateway
+      VpcId: !Ref ProxyVPC
+      SubnetIds:
+        - !Ref ProxySubnet1
+        - !Ref ProxySubnet2
+      SecurityGroupIds:
+        - !Ref ProxyVPCEndpointSecurityGroup
+      VpcEndpointType: Interface
+
+  ProxyLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref ProxyInstanceType
+        DisableApiTermination: false
+        EbsOptimized: true
+        KeyName: !Ref EC2KeyName
+        ImageId: !Ref ProxyAMI
+        SecurityGroupIds:
+          - !Ref ProxySecurityGroup
+        UserData:
+          Fn::Base64:
+            !Sub |
+            #!/bin/bash -xe
+            yum update -y aws-cfn-bootstrap
+            yum install -y squid
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource ProxyLaunchTemplate --region ${AWS::Region}
+            chkconfig squid on
+            service squid start
+      LaunchTemplateName: proxy-launch-template
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            /etc/squid/squid.conf:
+              content: |
+                acl localnet src 10.0.0.0/8 # RFC1918 possible internal network
+                acl localnet src 172.16.0.0/12 # RFC1918 possible internal network
+                acl localnet src 192.168.0.0/16 # RFC1918 possible internal network
+                acl localnet src fc00::/7 # RFC 4193 local private network range
+                acl localnet src fe80::/10 # RFC 4291 link-local (directly plugged) machines
+                acl SSL_ports port 443
+                acl SSL_ports port 1026
+                acl SSL_ports port 1027
+                acl SSL_ports port 1028
+                acl SSL_ports port 1031
+                acl SSL_ports port 2222
+                acl CONNECT method CONNECT
+                http_access deny !SSL_ports
+                http_access deny CONNECT !SSL_ports
+                http_access allow localhost manager
+                http_access deny manager
+                http_access allow localnet
+                http_access allow localhost
+                http_access deny all
+                http_port 3128
+                coredump_dir /var/spool/squid
+                refresh_pattern ^ftp: 1440 20% 10080
+                refresh_pattern ^gopher:  1440 0% 1440
+                refresh_pattern -i (/cgi-bin/|\?) 0 0% 0
+                refresh_pattern . 0 20% 4320
+
+
+  ProxyASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ProxyLaunchTemplate
+        Version: !GetAtt ProxyLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 1
+      TargetGroupARNs:
+        - !Ref ProxyNLBTargetGroup
+      VPCZoneIdentifier:
+        - !Ref ProxySubnet1
+        - !Ref ProxySubnet2
+
+  ProxyNLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets:
+        - !Ref ProxySubnet1
+        - !Ref ProxySubnet2
+      Type: network
+
+  ProxyNLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ProxyVPC
+      TargetType: instance
+      Port: 3128
+      Protocol: TCP
+
+  ProxyNLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ProxyNLBTargetGroup
+      LoadBalancerArn: !Ref ProxyNLB
+      Port: 3128
+      Protocol: TCP
+
+
+  # ----------------- Storage Gateway (on-prem) -----------------
+
+  SGVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: sg-vpc
+
+  SGInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: sg-ig
+
+  SGInternetGatewayGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref SGInternetGateway
+      VpcId: !Ref SGVPC
+
+  SGRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SGVPC
+      Tags:
+        - Key: Name
+          Value: sg-route-table
+
+  SGPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: SGInternetGatewayGatewayAttachment
+    Properties:
+      RouteTableId: !Ref SGRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref SGInternetGateway
+
+  SGSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SGVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.1.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sg-subnet-1
+
+  SGSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SGVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.1.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sg-subnet-2
+
+  SGSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SGSubnet1
+      RouteTableId: !Ref SGRouteTable
+
+  SGSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SGSubnet2
+      RouteTableId: !Ref SGRouteTable
+
+  SGSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Storage Gateway
+      VpcId: !Ref SGVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: sg-sg
+
+  SGActiveDirectory:
+    Type: AWS::DirectoryService::MicrosoftAD
+    Properties:
+      Name: !Ref ADDomain
+      Edition: Standard
+      Password: !Ref ADPassword
+      ShortName: !Ref ADShortName
+      VpcSettings:
+        SubnetIds:
+          - !Ref SGSubnet1
+          - !Ref SGSubnet2
+        VpcId: !Ref SGVPC
+
+  SGLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref SGInstanceType
+        DisableApiTermination: false
+        EbsOptimized: true
+        KeyName: !Ref EC2KeyName
+        ImageId: !Ref SGAMI
+        SecurityGroupIds:
+          - !Ref SGSecurityGroup
+        BlockDeviceMappings:
+          - DeviceName: '/dev/sdb'
+            Ebs:
+              DeleteOnTermination: true
+              Encrypted: true
+              VolumeSize: 250
+              VolumeType: "gp2"
+      LaunchTemplateName: sg-launch-template
+
+  SGInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref SGSubnet1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref SGLaunchTemplate
+        Version: !GetAtt SGLaunchTemplate.LatestVersionNumber
+
+
+  # ---------------------- Windows Client
+
+
+  WindowsClientTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref WindowsClientInstanceType
+        DisableApiTermination: false
+        EbsOptimized: true
+        KeyName: !Ref EC2KeyName
+        ImageId: !Ref WindowsClientAMI
+        SecurityGroupIds:
+          - !Ref SGSecurityGroup
+      LaunchTemplateName: windows-launch-template
+
+  WindowsClientInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref SGSubnet1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WindowsClientTemplate
+        Version: !GetAtt WindowsClientTemplate.LatestVersionNumber
