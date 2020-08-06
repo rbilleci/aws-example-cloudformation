@@ -47,11 +47,20 @@ Parameters:
   WindowsClientAMI:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base'
+    
+  LinuxClientAmi:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs'
 
   WindowsClientInstanceType:
     Type: String
     Default: t3.large
-    Description: Instance Type for the Storage Gateway
+    Description: Instance Type for the Windows Client
+    
+  LinuxClientInstanceType:
+    Type: String
+    Default: t3.medium
+    Description: Instance Type for Linux Client
 
 Resources:
 
@@ -508,3 +517,24 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId: !Ref WindowsClientTemplate
         Version: !GetAtt WindowsClientTemplate.LatestVersionNumber
+        
+ # ---------------------- Linux Client
+        
+  LinuxClientTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref LinuxClientInstanceType
+        DisableApiTermination: false
+        KeyName: !Ref EC2KeyName
+        ImageId: !Ref LinuxClientAMI
+        SecurityGroupIds:
+          - !Ref SGSecurityGroup
+        UserData:
+          Fn::Base64:
+            !Sub |
+            #!/bin/bash -xe
+            yum update -y aws-cfn-bootstrap
+            yum install -y cifs-utils
+      LaunchTemplateName: linux-launch-template
+         
