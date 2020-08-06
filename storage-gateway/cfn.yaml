@@ -538,3 +538,10 @@ Resources:
             yum install -y cifs-utils
       LaunchTemplateName: linux-launch-template
          
+  LinuxClientInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref SGSubnet1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LinuxClientTemplate
+        Version: !GetAtt LinuxClientTemplate.LatestVersionNumber
