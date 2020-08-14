@@ -163,16 +163,12 @@ Resources:
       SubnetId: !Ref Subnet3
       RouteTableId: !Ref RouteTable
 
-  SecurityGroup:
+  SGSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security Group for Storage Gateway
       VpcId: !Ref VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -182,16 +178,35 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
-          FromPort: 3389
-          ToPort: 3389
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
           CidrIp: 0.0.0.0/0
+        # iSCSI
         - IpProtocol: -1
-          FromPort: -1
-          ToPort: -1
+          FromPort: 3260
+          ToPort: 3260
+          CidrIp: 0.0.0.0/0
+        # NFS
+        - IpProtocol: -1
+          FromPort: 111
+          ToPort: 111
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: 20048
+          ToPort: 20048
+          CidrIp: 0.0.0.0/0
+        # SMB
+        - IpProtocol: -1
+          FromPort: 135
+          ToPort: 139
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: 445
+          ToPort: 445
           CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
         - IpProtocol: -1
@@ -200,7 +215,45 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub ${ResourceNamePrefix}-sg
+          Value: !Sub ${ResourceNamePrefix}-securitygroup
+
+  # VPC Endpoints ------------------------------------------------------------------------------------------------------
+
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref RouteTable
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref VPC
+      VpcEndpointType: Gateway
+
+  SGVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: false
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.storagegateway
+      VpcId: !Ref VPC
+      SubnetIds: !If [Create2AZs,
+                      [!Ref Subnet1, !Ref Subnet2],
+                      [!Ref Subnet1, !Ref Subnet2, !Ref Subnet3]]
+      SecurityGroupIds:
+        - !Ref SGVPCEndpointSecurityGroup
+      VpcEndpointType: Interface
+
+  SGVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Storage Gateway VPC Endpoint
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          SourceSecurityGroupId: !GetAtt SGSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-vpce-securitygroup
 
   # VPN ----------------------------------------------------------------------------------------------------------------
 
@@ -275,7 +328,7 @@ Resources:
         InstanceType: !Ref InstanceType
         KeyName: !Ref EC2KeyName
         SecurityGroupIds:
-          - !Ref SecurityGroup
+          - !Ref SGSecurityGroup
 
   InstanceAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
