@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  AMI:
+    Type: String
+    Default: ami-08dcf54ec97e3cbc8
+    Description: Region Specific AMI of the Storage Gateway
+
+  CidrBlock:
+    Type: String
+    Default: 10.0.0.0/27
+    Description: CIDR Block Range for VPC
+
+  CidrSubnets:
+    Type: Number
+    Default: 2
+    Description: The number of subnets to generate.
+    MinValue: 2
+    MaxValue: 3
+
+  CidrBitsPerSubnet:
+    Type: Number
+    Default: 4
+    Description: The number of subnet bits for the CIDR. For example, specifying a value "8" for this parameter will create a CIDR with a mask of "/24".
+    MinValue: 4
+    MaxValue: 16
+
+  EC2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: aws
+    Description: Key Pair
+
+  InstanceType:
+    Type: String
+    Default: r5n.large
+    Description: Instance Type for the Storage Gateway
+
+  ResourceNamePrefix:
+    Type: String
+    Default: sg
+    Description: Prefix used for resource name tag
+
+  VolumeSize:
+    Type: Number
+    Default: 300
+    MinValue: 200
+    MaxValue: 16000
+    Description: Volume Size for the Storage Gateway
+
+Conditions:
+  Create2AZs: !Equals [!Ref CidrSubnets, "2"]
+  Create3AZs: !Equals [!Ref CidrSubnets, "3"]
+
+Resources:
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-ig
+
+  InternetGatewayGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-route-table
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt VPC.CidrBlock, !Ref CidrSubnets, !Ref CidrBitsPerSubnet ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-subnet-1
+
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Select [ 1, !Cidr [ !GetAtt VPC.CidrBlock, !Ref CidrSubnets, !Ref CidrBitsPerSubnet ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-subnet-2
+
+  Subnet3:
+    Condition: Create3AZs
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: !Select [ 2, !Cidr [ !GetAtt VPC.CidrBlock, !Ref CidrSubnets, !Ref CidrBitsPerSubnet ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-subnet-3
+
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet1
+      RouteTableId: !Ref RouteTable
+
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet2
+      RouteTableId: !Ref RouteTable
+
+  Subnet3RouteTableAssociation:
+    Condition: Create3AZs
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet3
+      RouteTableId: !Ref RouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Storage Gateway
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-sg
+
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ ec2.amazonaws.com ]
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [ !Ref InstanceRole ]
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${ResourceNamePrefix}-launch-template
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: '/dev/sdb'
+            Ebs:
+              DeleteOnTermination: true
+              Encrypted: true
+              VolumeSize: !Ref VolumeSize
+              VolumeType: gp2
+        DisableApiTermination: false
+        EbsOptimized: true
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        ImageId: !Ref AMI
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref EC2KeyName
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+
+  InstanceAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      DesiredCapacity: 1
+      HealthCheckGracePeriod: 60
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MaxSize: 1
+      MinSize: 1
+      Tags:
+        - Key: Name
+          Value: !Sub ${ResourceNamePrefix}-asg
+          PropagateAtLaunch: false
+      VPCZoneIdentifier: !If [Create2AZs,
+                              [!Ref Subnet1, !Ref Subnet2],
+                              [!Ref Subnet1, !Ref Subnet2, !Ref Subnet3]]
