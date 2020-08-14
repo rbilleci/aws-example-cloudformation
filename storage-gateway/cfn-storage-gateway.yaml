@@ -46,7 +46,22 @@ Parameters:
     Default: 300
     MinValue: 200
     MaxValue: 16000
-    Description: Volume Size for the Storage Gateway
+    Description: Volume Size for the Storage Gateway, in GiB
+
+  VPNCustomerIPAddress:
+    Type: String
+    Default: 1.1.1.1
+    Description: The Internet-routable IP address for the customer gateway's outside interface. The address must be static
+
+  VPNAmazonASN:
+    Type: Number
+    Default: 65001
+    Description: The private Autonomous System Number (ASN) for the Amazon side of a BGP session
+
+  VPNCustomerASN:
+    Type: Number
+    Default: 65000
+    Description: For devices that support BGP, the customer gateway's BGP ASN
 
 Conditions:
   Create2AZs: !Equals [!Ref CidrSubnets, "2"]
@@ -54,13 +69,7 @@ Conditions:
 
 Resources:
 
-  Bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+  # Network ------------------------------------------------------------------------------------------------------------
 
   VPC:
     Type: AWS::EC2::VPC
@@ -193,12 +202,42 @@ Resources:
         - Key: Name
           Value: !Sub ${ResourceNamePrefix}-sg
 
+  # VPN ----------------------------------------------------------------------------------------------------------------
+
+  VPNGateway:
+    Type: AWS::EC2::VPNGateway
+    Properties:
+      AmazonSideAsn: !Ref VPNAmazonASN
+      Type: ipsec.1
+
+  VPNGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      VpnGatewayId: !Ref VPNGateway
+
+  VPNConnection:
+    Type: AWS::EC2::VPNConnection
+    Properties:
+      Type: ipsec.1
+      StaticRoutesOnly: true
+      CustomerGatewayId:
+        !Ref VPNCustomerGateway
+      VpnGatewayId:
+        !Ref VPNGateway
+
+  VPNCustomerGateway:
+    Type: AWS::EC2::CustomerGateway
+    Properties:
+      Type: ipsec.1
+      BgpAsn: !Ref VPNCustomerASN
+      IpAddress: !Ref VPNCustomerIPAddress
+
+  # Storage Gateway ASG ------------------------------------------------------------------------------------------------
 
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
       AssumeRolePolicyDocument:
         Statement:
           - Effect: Allow
@@ -206,6 +245,8 @@ Resources:
               Service: [ ec2.amazonaws.com ]
             Action:
               - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
       Path: /
 
   InstanceProfile:
@@ -253,3 +294,13 @@ Resources:
       VPCZoneIdentifier: !If [Create2AZs,
                               [!Ref Subnet1, !Ref Subnet2],
                               [!Ref Subnet1, !Ref Subnet2, !Ref Subnet3]]
+
+  # Storage and Archival -----------------------------------------------------------------------------------------------
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
