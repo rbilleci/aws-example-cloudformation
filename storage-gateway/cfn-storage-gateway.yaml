@@ -33,17 +33,10 @@ Parameters:
 
   GatewayCacheSize:
     Type: Number
-    Default: 200
+    Default: 300
     MinValue: 200
     MaxValue: 16000
     Description: Volume Size for the Storage Gateway Cache, in GiB
-
-  GatewayUploadBufferSize:
-    Type: Number
-    Default: 200
-    MinValue: 200
-    MaxValue: 16000
-    Description: Volume Size for the Storage Gateway Uploa Buffer, in GiB
 
   InstanceType:
     Type: String
@@ -341,12 +334,6 @@ Resources:
             Ebs:
               DeleteOnTermination: true
               Encrypted: true
-              VolumeSize: !Ref GatewayUploadBufferSize
-              VolumeType: gp2
-          - DeviceName: '/dev/sdc'
-            Ebs:
-              DeleteOnTermination: true
-              Encrypted: true
               VolumeSize: !Ref GatewayCacheSize
               VolumeType: gp2
         DisableApiTermination: false
@@ -365,12 +352,10 @@ Resources:
             export AWS_DEFAULT_REGION="$(wget -q -O - http://169.254.169.254/latest/meta-data/placement/region)"
             export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
             export ACTIVATION_KEY=$(wget http://localhost:8080/?activationRegion=$AWS_DEFAULT_REGION 2>&1 | sed -n '/activationKey/ s/.*\= *//p' | sed '$!d')
-            export GATEWAY_ARN=$(aws storagegateway activate-gateway --gateway-name $GATEWAY_NAME --gateway-timezone GMT --gateway-region $AWS_DEFAULT_REGION --activation-key $ACTIVATION_KEY --gateway-type CACHED --query GatewayARN --output text)
+            export GATEWAY_ARN=$(aws storagegateway activate-gateway --gateway-name $GATEWAY_NAME --gateway-timezone GMT --gateway-region $AWS_DEFAULT_REGION --activation-key $ACTIVATION_KEY --gateway-type FILE_S3 --query GatewayARN --output text)
             sleep 60
-            export UPLOAD_DISK_ID=$(aws storagegateway list-local-disks --gateway-arn $GATEWAY_ARN --query 'Disks[?DiskNode==`/dev/sdb`].DiskId' --output text)
-            export CACHE_DISK_ID=$(aws storagegateway list-local-disks --gateway-arn $GATEWAY_ARN --query 'Disks[?DiskNode==`/dev/sdc`].DiskId' --output text)
-            aws storagegateway add-upload-buffer --gateway-arn $GATEWAY_ARN --disk-ids $UPLOAD_DISK_ID
-            aws storagegateway add-cache --gateway-arn $GATEWAY_ARN --disk-ids $CACHE_DISK_ID
+            export DISK_ID=$(aws storagegateway list-local-disks --gateway-arn $GATEWAY_ARN --query 'Disks[?DiskNode==`/dev/sdb`].DiskId' --output text)
+            aws storagegateway add-cache --gateway-arn $GATEWAY_ARN --disk-ids $DISK_ID
 
   InstanceAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
