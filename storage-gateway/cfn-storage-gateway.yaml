@@ -31,6 +31,20 @@ Parameters:
     Default: aws
     Description: Key Pair
 
+  GatewayCacheSize:
+    Type: Number
+    Default: 200
+    MinValue: 200
+    MaxValue: 16000
+    Description: Volume Size for the Storage Gateway Cache, in GiB
+
+  GatewayUploadBufferSize:
+    Type: Number
+    Default: 200
+    MinValue: 200
+    MaxValue: 16000
+    Description: Volume Size for the Storage Gateway Uploa Buffer, in GiB
+
   InstanceType:
     Type: String
     Default: r5n.large
@@ -40,13 +54,6 @@ Parameters:
     Type: String
     Default: sg
     Description: Prefix used for resource name tag
-
-  VolumeSize:
-    Type: Number
-    Default: 300
-    MinValue: 200
-    MaxValue: 16000
-    Description: Volume Size for the Storage Gateway, in GiB
 
   VPNCustomerIPAddress:
     Type: String
@@ -288,7 +295,7 @@ Resources:
 
   # Storage Gateway ASG ------------------------------------------------------------------------------------------------
 
-  InstanceRole:
+  SGRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -301,12 +308,28 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
       Path: /
+      Policies:
+        - PolicyName: sg-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - storagegateway:ActivateGateway
+                  - storagegateway:AddUploadBuffer
+                  - storagegateway:AddCache
+                  - storagegateway:DescribeGatewayInformation
+                  - storagegateway:ListGateways
+                  - storagegateway:ListLocalDisks
+                  - storagegateway:StartGateway
+                  - storagegateway:RefreshCache
+                Resource: '*'
 
-  InstanceProfile:
+  SGInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Path: /
-      Roles: [ !Ref InstanceRole ]
+      Roles: [ !Ref SGRole ]
 
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -318,21 +341,41 @@ Resources:
             Ebs:
               DeleteOnTermination: true
               Encrypted: true
-              VolumeSize: !Ref VolumeSize
+              VolumeSize: !Ref GatewayUploadBufferSize
+              VolumeType: gp2
+          - DeviceName: '/dev/sdc'
+            Ebs:
+              DeleteOnTermination: true
+              Encrypted: true
+              VolumeSize: !Ref GatewayCacheSize
               VolumeType: gp2
         DisableApiTermination: false
         EbsOptimized: true
         IamInstanceProfile:
-          Arn: !GetAtt InstanceProfile.Arn
+          Arn: !GetAtt SGInstanceProfile.Arn
         ImageId: !Ref AMI
         InstanceType: !Ref InstanceType
         KeyName: !Ref EC2KeyName
         SecurityGroupIds:
           - !Ref SGSecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash -xe
+            export GATEWAY_NAME=gateway
+            export AWS_DEFAULT_REGION="$(wget -q -O - http://169.254.169.254/latest/meta-data/placement/region)"
+            export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            export ACTIVATION_KEY=$(wget http://localhost:8080/?activationRegion=$AWS_DEFAULT_REGION 2>&1 | sed -n '/activationKey/ s/.*\= *//p' | sed '$!d')
+            export GATEWAY_ARN=$(aws storagegateway activate-gateway --gateway-name $GATEWAY_NAME --gateway-timezone GMT --gateway-region $AWS_DEFAULT_REGION --activation-key $ACTIVATION_KEY --gateway-type CACHED --query GatewayARN --output text)
+            sleep 60
+            export UPLOAD_DISK_ID=$(aws storagegateway list-local-disks --gateway-arn $GATEWAY_ARN --query 'Disks[?DiskNode==`/dev/sdb`].DiskId' --output text)
+            export CACHE_DISK_ID=$(aws storagegateway list-local-disks --gateway-arn $GATEWAY_ARN --query 'Disks[?DiskNode==`/dev/sdc`].DiskId' --output text)
+            aws storagegateway add-upload-buffer --gateway-arn $GATEWAY_ARN --disk-ids $UPLOAD_DISK_ID
+            aws storagegateway add-cache --gateway-arn $GATEWAY_ARN --disk-ids $CACHE_DISK_ID
 
   InstanceAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
+      AutoScalingGroupName: !Sub ${ResourceNamePrefix}-asg
       DesiredCapacity: 1
       HealthCheckGracePeriod: 60
       LaunchTemplate:
@@ -340,13 +383,82 @@ Resources:
         Version: !GetAtt LaunchTemplate.LatestVersionNumber
       MaxSize: 1
       MinSize: 1
-      Tags:
-        - Key: Name
-          Value: !Sub ${ResourceNamePrefix}-asg
-          PropagateAtLaunch: false
       VPCZoneIdentifier: !If [Create2AZs,
                               [!Ref Subnet1, !Ref Subnet2],
                               [!Ref Subnet1, !Ref Subnet2, !Ref Subnet3]]
+
+
+  # Lambda Create Image Scheduler --------------------------------------------------------------------------------------
+
+  CreateImageFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: create-image-execution-role
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:UpdateAutoScalingGroup
+                  - ec2:CreateImage
+                  - ec2:CreateSnapshot
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:ModifyLaunchTemplate
+                  - ec2:RunInstances
+                  - iam:PassRole
+                Resource: "*"
+
+  CreateImageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: !Sub |
+          import json
+          import boto3
+
+          def lambda_handler(event, context):
+            asg_name = "${ResourceNamePrefix}-asg"
+            launch_template_name="${ResourceNamePrefix}-launch-template"
+            as_client = boto3.client("autoscaling")
+            ec_client = boto3.client("ec2")
+
+            # Retrieve the current instance assigned to the ASG
+            asg = as_client.describe_auto_scaling_groups(AutoScalingGroupNames=[asg_name]).get("AutoScalingGroups")
+            instance_id = asg[0].get("Instances")[0].get("InstanceId")
+
+            # Create a new image and update the launch template an auto-scaling group
+            image_id = ec_client.create_image(Name="sgw-ami", InstanceId=instance_id, NoReboot=True).get("ImageId")
+            ec_client.create_launch_template_version(LaunchTemplateName=launch_template_name, LaunchTemplateData={"ImageId": image_id}, SourceVersion="$Latest")
+            ec_client.modify_launch_template(LaunchTemplateName=launch_template_name, DefaultVersion="$Latest")
+            as_client.update_auto_scaling_group(AutoScalingGroupName=asg_name, LaunchTemplate={"LaunchTemplateName": launch_template_name, "Version": "$Latest"})
+
+            return { "statusCode": 200 }
+      FunctionName: create-image
+      Handler: index.lambda_handler
+      Role: !GetAtt CreateImageFunctionRole.Arn
+      Runtime: python3.7
+      Timeout: 30
 
   # Storage and Archival -----------------------------------------------------------------------------------------------
 

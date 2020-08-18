@@ -4,7 +4,7 @@
 
 #### Get the AMI
 
-Get the image id of the latest AWS Storgage Gateway image from the marketplace. Run the following command, making sure to enter 
+Get the image id of the latest AWS Storage Gateway image from the marketplace. Run the following command, making sure to enter 
 the region you intend to deploy to.
 
 <code>
