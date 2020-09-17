@@ -5,12 +5,12 @@ Parameters:
 
   ADDomain:
     Type: String
-    Default: 'aws.com'
+    Default: 'test.com'
     Description: Active Directory Domain Name
 
   ADPassword:
     Type: String
-    Default: '!SGExample1234!'
+    Default: '!Test1234!'
     NoEcho: true
     Description: Active Directory Admin Password
 
@@ -120,11 +120,6 @@ Resources:
 
   # Network Load Balancer for AD VPC Endpoint Service ------------------------------------------------------------------
   #
-  # Note, most of the AD ports are exposed through the NLB in this example
-  # It may be that you only need a small subset of these ports.
-  # It is also possible not all of the required ports are listed here!
-  # Please review carefully and limit to what is needed.
-  # Also note, PrivateLink does not support UDP.
 
   NLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
