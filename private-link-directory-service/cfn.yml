@@ -1,0 +1,339 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+
+Parameters:
+
+  ADDomain:
+    Type: String
+    Default: 'aws.com'
+    Description: Active Directory Domain Name
+
+  ADPassword:
+    Type: String
+    Default: '!SGExample1234!'
+    NoEcho: true
+    Description: Active Directory Admin Password
+
+  ADShortName:
+    Type: String
+    Default: AWS
+    Description: Active Directory Short Name (NetBios Name)
+
+
+Resources:
+
+  AD:
+    Type: AWS::DirectoryService::MicrosoftAD
+    Properties:
+      Name: !Ref ADDomain
+      Edition: Standard
+      Password: !Ref ADPassword
+      ShortName: !Ref ADShortName
+      VpcSettings:
+        SubnetIds:
+          - !Ref ADSubnet1
+          - !Ref ADSubnet2
+        VpcId: !Ref ADVPC
+
+  ADVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ad-vpc
+
+  ADInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ad-ig
+
+  ADInternetGatewayGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref ADInternetGateway
+      VpcId: !Ref ADVPC
+
+  ADRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ADVPC
+      Tags:
+        - Key: Name
+          Value: ad-route-table
+
+  ADPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: ADInternetGatewayGatewayAttachment
+    Properties:
+      RouteTableId: !Ref ADRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ADInternetGateway
+
+  ADSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ADVPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.1.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ad-subnet-1
+
+  ADSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ADVPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.1.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ad-subnet-2
+
+  ADSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ADSubnet1
+      RouteTableId: !Ref ADRouteTable
+
+  ADSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ADSubnet2
+      RouteTableId: !Ref ADRouteTable
+
+
+  # VPC Endpoint Service ------------------------------------------------------------------------------------------------
+  ADEndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: true
+      NetworkLoadBalancerArns:
+        - !Ref NLB
+
+
+  # Network Load Balancer for AD VPC Endpoint Service ------------------------------------------------------------------
+  #
+  # Note, most of the AD ports are exposed through the NLB in this example
+  # It may be that you only need a small subset of these ports.
+  # It is also possible not all of the required ports are listed here!
+  # Please review carefully and limit to what is needed.
+  # Also note, PrivateLink does not support UDP.
+
+  NLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets:
+        - !Ref ADSubnet1
+        - !Ref ADSubnet2
+      Type: network
+      LoadBalancerAttributes:
+        Key: load_balancing.cross_zone.enabled
+        Value: true
+  # ----
+  TG53:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 53
+      Protocol: TCP
+  L53:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG53
+      LoadBalancerArn: !Ref NLB
+      Port: 53
+      Protocol: TCP
+  # ----
+  TG88:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 88
+      Protocol: TCP
+  L88:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG88
+      LoadBalancerArn: !Ref NLB
+      Port: 88
+      Protocol: TCP
+  # ----
+  TG135:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 135
+      Protocol: TCP
+  L135:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG135
+      LoadBalancerArn: !Ref NLB
+      Port: 135
+      Protocol: TCP
+  # ----
+  TG139:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 139
+      Protocol: TCP
+  L139:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG139
+      LoadBalancerArn: !Ref NLB
+      Port: 139
+      Protocol: TCP
+  # ----
+  TG389:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 389
+      Protocol: TCP
+  L389:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG389
+      LoadBalancerArn: !Ref NLB
+      Port: 389
+      Protocol: TCP
+  # ----
+  TG445:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 445
+      Protocol: TCP
+  L445:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG445
+      LoadBalancerArn: !Ref NLB
+      Port: 445
+      Protocol: TCP
+  # ----
+  TG464:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 464
+      Protocol: TCP
+  L464:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG464
+      LoadBalancerArn: !Ref NLB
+      Port: 464
+      Protocol: TCP
+  # ----
+  TG636:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 636
+      Protocol: TCP
+  L636:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG636
+      LoadBalancerArn: !Ref NLB
+      Port: 636
+      Protocol: TCP
+  # ----
+  TG3268:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 3268
+      Protocol: TCP
+  L3268:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG3268
+      LoadBalancerArn: !Ref NLB
+      Port: 3268
+      Protocol: TCP
+  # ----
+  TG3269:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ADVPC
+      TargetType: ip
+      Targets:
+        - Id: !Select [0, !GetAtt AD.DnsIpAddresses]
+        - Id: !Select [1, !GetAtt AD.DnsIpAddresses]
+      Port: 3269
+      Protocol: TCP
+  L3269:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG3269
+      LoadBalancerArn: !Ref NLB
+      Port: 3269
+      Protocol: TCP
