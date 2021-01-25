@@ -240,7 +240,6 @@ Resources:
 
   NeptuneCluster:
     Type: AWS::Neptune::DBCluster
-    DeletionPolicy: Snapshot
     Properties: 
       AvailabilityZones: 
         - !GetAtt PrivateSubnet1.AvailabilityZone
@@ -258,7 +257,6 @@ Resources:
 
   NeptuneInstance:
     Type: AWS::Neptune::DBInstance
-    DeletionPolicy: Snapshot
     Properties: 
       AllowMajorVersionUpgrade: false
       AutoMinorVersionUpgrade: true
@@ -298,3 +296,10 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName}-neptune-sg
 
+KnowledgeGraphBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
