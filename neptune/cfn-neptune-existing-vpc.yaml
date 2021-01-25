@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  VPC:
+    Description: The VPC to deploy Amazon Neptune to.
+    Type: AWS::EC2::VPC::Id
+
+  NeptuneSubnets:
+    Description: Subnets to deploy Amazon Neptune to
+    Type: List<AWS::EC2::Subnet::Id>
+    
+  NeptuneInstanceClass:
+    Description: Instance type for Neptune Cluster
+    Type: String
+    Default: db.t3.medium
+
+Resources:
+
+  NeptuneCluster:
+    Type: AWS::Neptune::DBCluster
+    Properties: 
+      BackupRetentionPeriod: 35        
+      DBSubnetGroupName: !Ref NeptuneSubnetGroup
+      DeletionProtection: true
+      IamAuthEnabled: false
+      PreferredBackupWindow: 06:00-07:00
+      PreferredMaintenanceWindow: sat:07:00-sat:08:00
+      StorageEncrypted: true      
+      VpcSecurityGroupIds: 
+        - !Ref NeptuneSecurityGroup
+
+  NeptuneInstance:
+    Type: AWS::Neptune::DBInstance
+    Properties: 
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      DBClusterIdentifier: !Ref NeptuneCluster
+      DBInstanceClass: !Ref NeptuneInstanceClass
+      #DBInstanceIdentifier: String
+      #DBParameterGroupName: String
+      #DBSnapshotIdentifier: String
+      #DBSubnetGroupName: String
+
+  NeptuneSubnetGroup:
+    Type: AWS::Neptune::DBSubnetGroup
+    Properties: 
+      DBSubnetGroupDescription: !Sub ${AWS::StackName} Subgnet Group
+      DBSubnetGroupName: !Sub ${AWS::StackName}-db-subnet-group
+      SubnetIds: !Ref NeptuneSubnets
+
+  NeptuneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for Amazon Neptune Cluster
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8182
+          ToPort: 8182
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-neptune-sg
+
+  KnowledgeGraphBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
