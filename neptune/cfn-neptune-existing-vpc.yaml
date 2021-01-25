@@ -19,6 +19,7 @@ Resources:
 
   NeptuneCluster:
     Type: AWS::Neptune::DBCluster
+    DeletionPolicy: Snapshot
     Properties: 
       BackupRetentionPeriod: 35        
       DBSubnetGroupName: !Ref NeptuneSubnetGroup
