@@ -296,7 +296,7 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName}-neptune-sg
 
-KnowledgeGraphBucket:
+  KnowledgeGraphBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketEncryption:
