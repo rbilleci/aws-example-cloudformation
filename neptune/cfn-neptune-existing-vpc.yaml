@@ -22,7 +22,7 @@ Parameters:
     AllowedValues: [true, false]
       
 Conditions:
-  NeptuneStreamsEnabled: !Equals [ !Ref NeptuneStreamsEnabled, Yes ]
+  NeptuneStreamsEnabled: !Equals [ !Ref NeptuneStreamsEnabled, true ]
   
 Resources:
 
