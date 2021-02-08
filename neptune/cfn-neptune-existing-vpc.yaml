@@ -15,6 +15,15 @@ Parameters:
     Type: String
     Default: db.t3.medium
 
+  NeptuneStreamsEnabled:
+    Description: Should neptune streams be enabled?
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+      
+Conditions:
+  NeptuneStreamsEnabled: !Equals [ !Ref NeptuneStreamsEnabled, Yes ]
+  
 Resources:
 
   NeptuneCluster:
@@ -22,7 +31,8 @@ Resources:
     DeletionPolicy: Snapshot
     Properties: 
       BackupRetentionPeriod: 35        
-      DBSubnetGroupName: !Ref NeptuneSubnetGroup
+      DBClusterParameterGroupName: !Ref NeptuneClusterParameterGroup
+      DBSubnetGroupName: !Ref NeptuneSubnetGroup      
       DeletionProtection: true
       IamAuthEnabled: false
       PreferredBackupWindow: 06:00-07:00
@@ -31,6 +41,14 @@ Resources:
       VpcSecurityGroupIds: 
         - !Ref NeptuneSecurityGroup
 
+  NeptuneClusterParameterGroup:        
+    Type: AWS::Neptune::DBClusterParameterGroup
+    Properties: 
+      Description: Parameter Group for Neptune Cluster
+      Family: neptune1 # must be 'neptune1'
+      Parameters:
+        neptune_streams: !If [ NeptuneStreamsEnabled, 1, 0]
+      
   NeptuneInstance:
     Type: AWS::Neptune::DBInstance
     Properties: 
@@ -69,10 +87,3 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName}-neptune-sg
 
-  KnowledgeGraphBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-        - ServerSideEncryptionByDefault:
-            SSEAlgorithm: AES256
